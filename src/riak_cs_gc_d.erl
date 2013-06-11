@@ -237,9 +237,16 @@ paused(_, State) ->
 %% Synchronous events
 
 idle({manual_batch, Options}, _From, State) ->
-    ok_reply(fetching_next_fileset, start_manual_batch(
-                                       lists:member(testing, Options),
-                                       State));
+    Now = riak_cs_gc:timestamp(),
+    case manual_batch_options(Now, Options, []) of
+        {ok, Opts} ->
+            ok_reply(fetching_next_fileset,
+                     start_manual_batch(Now, Opts,
+                                        lists:member(testing, Options),
+                                        State));
+        {error, _} = Error ->
+            {reply, Error, idle, State}
+    end;
 idle(pause, _From, State) ->
     ok_reply(paused, pause_gc(idle, State));
 idle({set_interval, Interval}, _From, State)
@@ -323,7 +330,7 @@ handle_sync_event(_Event, _From, StateName, State) ->
     ok_reply(StateName, State).
 
 handle_info(start_batch, idle, State) ->
-    NewState = start_batch(State),
+    NewState = start_batch(riak_cs_gc:timestamp(), [], State),
     {next_state, fetching_next_fileset, NewState};
 handle_info(start_batch, InBatch, State) ->
     _ = lager:info("Unable to start garbage collection batch"
@@ -344,6 +351,31 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+-spec manual_batch_options(integer(), [term()], [term()]) ->
+                                  {ok, [term()]} | {error, term()}.
+manual_batch_options(_Now, [], Acc) ->
+    {ok, Acc};
+manual_batch_options(Now, [testing | Rest], Acc) ->
+    manual_batch_options(Now, Rest, [testing | Acc]);
+manual_batch_options(Now, ["-s", StartTimeStr | Rest], Acc) ->
+    case catch list_to_integer(StartTimeStr) of
+        StartTime when is_integer(StartTime) andalso StartTime < Now ->
+            manual_batch_options(Now, Rest,
+                                 [{start_time, list_to_binary(StartTimeStr)} | Acc]);
+        _ ->
+            {error, invalid_option}
+    end;
+manual_batch_options(Now, ["-e", EndTimeStr | Rest], Acc) ->
+    case catch list_to_integer(EndTimeStr) of
+        EndTime when is_integer(EndTime) andalso EndTime < Now ->
+            manual_batch_options(Now, Rest,
+                                 [{end_time, list_to_binary(EndTimeStr)} | Acc]);
+        _ ->
+            {error, invalid_option}
+    end;
+manual_batch_options(_Now, [_Unknown | _], _Acc) ->
+    {error, invalid_option}.
 
 %% @doc Cancel the current batch of files set for garbage collection.
 -spec cancel_batch(#state{}) -> #state{}.
@@ -379,10 +411,10 @@ elapsed(Time) ->
 
 %% @doc Fetch the list of keys for file manifests that are eligible
 %% for delete.
--spec fetch_eligible_manifest_keys(pid(), non_neg_integer()) -> [binary()].
-fetch_eligible_manifest_keys(RiakPid, IntervalStart) ->
-    EndTime = list_to_binary(integer_to_list(IntervalStart)),
-    eligible_manifest_keys(gc_index_query(RiakPid, EndTime)).
+-spec fetch_eligible_manifest_keys(pid(), non_neg_integer(), non_neg_integer()) ->
+                                          [binary()].
+fetch_eligible_manifest_keys(RiakPid, StartTime, EndTime) ->
+    eligible_manifest_keys(gc_index_query(RiakPid, StartTime, EndTime)).
 
 eligible_manifest_keys({{ok, Keys}, _}) ->
     Keys;
@@ -392,11 +424,11 @@ eligible_manifest_keys({{error, Reason}, EndTime}) ->
                       [EndTime, Reason]),
     [].
 
-gc_index_query(RiakPid, EndTime) ->
+gc_index_query(RiakPid, StartTime, EndTime) ->
     QueryResult = riakc_pb_socket:get_index(RiakPid,
                                             ?GC_BUCKET,
                                             ?KEY_INDEX,
-                                            riak_cs_gc:epoch_start(),
+                                            StartTime,
                                             EndTime),
     {QueryResult, EndTime}.
 
@@ -501,7 +533,7 @@ schedule_next(#state{batch_start=Current,
 %% @doc Actually kick off the batch.  After calling this function, you
 %% must advance the FSM state to `fetching_next_fileset'.
 %% Intentionally pattern match on an undefined Riak handle.
-start_batch(State=#state{riak=undefined}) ->
+start_batch(Now, Opts, State=#state{riak=undefined}) ->
     %% this does not check out a worker from the riak
     %% connection pool; instead it creates a fresh new worker,
     %% the idea being that we don't want to delay deletion
@@ -511,11 +543,23 @@ start_batch(State=#state{riak=undefined}) ->
     %% connection, and avoids duplicating the configuration
     %% lookup code
     {ok, Riak} = riak_cs_riakc_pool_worker:start_link([]),
-    BatchStart = riak_cs_gc:timestamp(),
-    Batch = fetch_eligible_manifest_keys(Riak, BatchStart),
+    StartTime = case proplists:get_value(start_time, Opts) of
+                    undefined ->
+                        riak_cs_gc:epoch_start();
+                    StartValue ->
+                        StartValue
+                   end,
+    EndTime = case proplists:get_value(end_time, Opts) of
+                  undefined ->
+                      list_to_binary(integer_to_list(Now));
+                  EndValue ->
+                      EndValue
+              end,
+    _ = lager:debug("StartTime-EndTime: ~p-~p", [StartTime, EndTime]),
+    Batch = fetch_eligible_manifest_keys(Riak, StartTime, EndTime),
     _ = lager:debug("Batch keys: ~p", [Batch]),
     gen_fsm:send_event(self(), continue),
-    State#state{batch_start=BatchStart,
+    State#state{batch_start=Now,
                 batch=Batch,
                 batch_count=0,
                 batch_skips=0,
@@ -523,11 +567,11 @@ start_batch(State=#state{riak=undefined}) ->
                 block_count=0,
                 riak=Riak}.
 
--spec start_manual_batch(boolean(), #state{}) -> #state{}.
-start_manual_batch(true, State) ->
+-spec start_manual_batch(integer(), [term()], boolean(), #state{}) -> #state{}.
+start_manual_batch(_Now, _Opts, true, State) ->
     State#state{batch=undefined};
-start_manual_batch(false, State) ->
-    start_batch(State).
+start_manual_batch(Now, Opts, false, State) ->
+    start_batch(Now, Opts, State).
 
 %% @doc Extract a list of status information from a state record.
 %%

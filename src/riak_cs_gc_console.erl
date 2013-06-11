@@ -49,8 +49,8 @@
 
 %% @doc Kick off a gc round, unless one is already
 %% in progress.
-batch(_Opts) ->
-    ?SAFELY(start_batch(), "Starting garbage collection batch").
+batch(Opts) ->
+    ?SAFELY(start_batch(Opts), "Starting garbage collection batch").
 
 %% @doc Find out what the gc daemon is up to.
 status(_Opts) ->
@@ -72,8 +72,8 @@ resume(_Opts) ->
 %%% Internal functions
 %%%===================================================================
 
-start_batch() ->
-    handle_batch_start(riak_cs_gc_d:manual_batch([])).
+start_batch(Opts) ->
+    handle_batch_start(riak_cs_gc_d:manual_batch(Opts)).
 
 get_status() ->
     handle_status(riak_cs_gc_d:status()).
@@ -105,6 +105,9 @@ handle_batch_start(ok) ->
 handle_batch_start({error, already_deleting}) ->
     output("Error: A garbage collection batch"
            " is already in progress."),
+    error;
+handle_batch_start({error, invalid_option}) ->
+    output("Error: Garbage collection option is invalid."),
     error.
 
 handle_status({ok, {State, Details}}) ->
