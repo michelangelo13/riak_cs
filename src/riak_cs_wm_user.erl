@@ -260,7 +260,7 @@ handle_get_user_result({error, Reason}, RD, Ctx) ->
     riak_cs_s3_response:api_error(invalid_access_key_id, RD, Ctx).
 
 -spec update_user([{binary(), binary()}], term(), term()) ->
-    {boolean() | {halt, term()}, term(), term()}.
+    {{ok, rcs_user()} | {halt, term()}, term(), term()}.
 update_user(UpdateItems, RD, Ctx=#context{user=User}) ->
     riak_cs_dtrace:dt_wm_entry(?MODULE, <<"update_user">>),
     UpdateUserResult = update_user_record(User, UpdateItems, false),
@@ -290,9 +290,8 @@ update_user_record(_User, [_ | RestUpdates], _RecordUpdated) ->
 
 -spec handle_update_result({boolean(), rcs_user()}, term(), term()) ->
     {boolean() | {halt, term()}, term(), term()}.
-handle_update_result({false, _User}, RD, Ctx) ->
-    ContentType = wrq:get_resp_header("Content-Type", RD),
-    {{halt, 200}, set_resp_data(ContentType, RD, Ctx), Ctx};
+handle_update_result({false, _User}, _RD, _Ctx) ->
+    {halt, 200};
 handle_update_result({true, User}, _RD, Ctx) ->
     #context{user_object=UserObj,
              riakc_pid=RiakPid} = Ctx,
@@ -395,6 +394,8 @@ user_response({ok, User}, ContentType, RD, Ctx) ->
         wrq:set_resp_body(UserDoc,
                           wrq:set_resp_header("Content-Type", ContentType, RD)),
     {true, WrittenRD, Ctx};
+user_response({halt, 200}, ContentType, RD, Ctx) ->
+    {{halt, 200}, set_resp_data(ContentType, RD, Ctx), Ctx};
 user_response({error, Reason}, _, RD, Ctx) ->
     riak_cs_s3_response:api_error(Reason, RD, Ctx).
 
