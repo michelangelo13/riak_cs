@@ -259,8 +259,8 @@ handle_get_user_result({error, Reason}, RD, Ctx) ->
                       " Reason: ~p", [user_key(RD), Reason]),
     riak_cs_s3_response:api_error(invalid_access_key_id, RD, Ctx).
 
--spec update_user([{binary(), binary()}], term(), term()) ->
-    {{ok, rcs_user()} | {halt, term()}, term(), term()}.
+-spec update_user([{atom(), term()}], #wm_reqdata{}, #context{}) ->
+    {ok, rcs_user()} | {halt, term()} | {error, term()}.
 update_user(UpdateItems, RD, Ctx=#context{user=User}) ->
     riak_cs_dtrace:dt_wm_entry(?MODULE, <<"update_user">>),
     UpdateUserResult = update_user_record(User, UpdateItems, false),
@@ -289,7 +289,7 @@ update_user_record(_User, [_ | RestUpdates], _RecordUpdated) ->
     update_user_record(_User, RestUpdates, _RecordUpdated).
 
 -spec handle_update_result({boolean(), rcs_user()}, term(), term()) ->
-    {boolean() | {halt, term()}, term(), term()}.
+    {ok, rcs_user()} | {halt, term()} | {error, term()}.
 handle_update_result({false, _User}, _RD, _Ctx) ->
     {halt, 200};
 handle_update_result({true, User}, _RD, Ctx) ->
@@ -385,7 +385,7 @@ user_xml_filter(Element, Acc) ->
             Acc
     end.
 
--spec user_response({ok, rcs_user()} | {error, term()},
+-spec user_response({ok, rcs_user()} | {halt, term()} | {error, term()},
                         string(), #wm_reqdata{}, #context{}) ->
                                {true | {halt, non_neg_integer()}, #wm_reqdata{}, #context{}}.
 user_response({ok, User}, ContentType, RD, Ctx) ->
