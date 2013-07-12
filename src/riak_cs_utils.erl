@@ -315,16 +315,20 @@ handle_update_user({error, _}=Error, _User, _, _) ->
                          {ok, rcs_user()} | {error, term()}.
 update_user(User, UserObj, RiakPid) ->
     {StIp, StPort, StSSL} = stanchion_data(),
-    {ok, AdminCreds} = riak_cs_config:admin_creds(),
-    Options = [{ssl, StSSL}, {auth_creds, AdminCreds}],
-    %% Make a call to the user request serialization service.
-    Result = velvet:update_user(StIp,
-                                StPort,
-                                "application/json",
-                                User?RCS_USER.key_id,
-                                binary_to_list(riak_cs_json:to_json(User)),
-                                Options),
-    handle_update_user(Result, User, UserObj, RiakPid).
+    case riak_cs_config:admin_creds() of
+        {ok, AdminCreds} ->
+            Options = [{ssl, StSSL}, {auth_creds, AdminCreds}],
+            %% Make a call to the user request serialization service.
+            Result = velvet:update_user(StIp,
+                                        StPort,
+                                        "application/json",
+                                        User?RCS_USER.key_id,
+                                        binary_to_list(riak_cs_json:to_json(User)),
+                                        Options),
+            handle_update_user(Result, User, UserObj, RiakPid);
+        {error, _}=Error ->
+            Error
+    end.
 
 %% @doc Delete a bucket
 -spec delete_bucket(rcs_user(), riakc_obj:riakc_obj(), binary(), pid()) ->
