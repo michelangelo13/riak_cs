@@ -294,7 +294,7 @@ done(finalize, false, From, State=#state{manifest=Manifest,
                                          riakc_pid=RiakPid,
                                          timer_ref=TimerRef}) ->
     _ = erlang:cancel_timer(TimerRef),
-    %% THe digest is invalid. Write the manifest and immediately
+    %% The digest is invalid. Write the manifest and immediately
     %% schedule it for gc.
     _ = maybe_update_manifest_with_confirmation(ManiPid, Manifest),
     _ = riak_cs_gc:gc_active_manifests(Bucket, Key, RiakPid),
